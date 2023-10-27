@@ -1,6 +1,7 @@
 """Script to generate a Gramps family tree database with random data."""
 
 import datetime
+import glob
 import os
 import random
 import uuid
@@ -9,6 +10,7 @@ from typing import Optional, Union
 import faker
 from gramps.gen.db import DbTxn
 from gramps.gen.db.utils import make_database
+from gramps.gen.display.name import NameDisplay
 from gramps.gen.lib import (
     ChildRef,
     Date,
@@ -16,6 +18,8 @@ from gramps.gen.lib import (
     EventRef,
     EventType,
     Family,
+    Media,
+    MediaRef,
     Note,
     Person,
     Place,
@@ -25,6 +29,7 @@ from gramps.gen.lib import (
     Surname,
 )
 from gramps.gen.user import User
+from gramps.gen.utils.file import create_checksum
 from gramps.plugins.export.exportxml import XmlWriter
 
 
@@ -51,6 +56,12 @@ class FakeTree:
         self.db = make_database("sqlite")
         self.db.load(":memory:")
         self.places = []
+        self.images = set(self._get_images())
+        self.db.set_mediapath(os.path.abspath("."))
+
+    def _get_images(self):
+        """Get a list of images."""
+        return glob.glob("**/*.jpg", recursive=True)
 
     def export(self, filename) -> None:
         """Export the database to Gramps XML."""
@@ -199,6 +210,37 @@ class FakeTree:
         )
         person.death_ref_index = len(person.event_ref_list) - 1
 
+    def add_face(self, person: Person, color: bool = True):
+        face = ""
+        for image in self.images:
+            if color and "people" in image and "color" in image:
+                face = image
+                break
+            if not color and "people" in image and "grayscale" in image:
+                face = image
+                break
+        if not face:
+            return
+        # remove image from faces since we used it
+        self.images = self.images - {face}
+
+        media = Media()
+        media.handle = self.random_handle()
+        media.set_path(face)
+        checksum = create_checksum(os.path.abspath(face))
+        media.set_checksum(checksum)
+        media.set_mime_type("image/jpeg")
+        name_display = NameDisplay()
+        person_name = name_display.display(person)
+        media.set_description(person_name)
+
+        with DbTxn("Add media object", self.db) as trans:
+            self.db.add_media(media, trans)
+
+        media_ref = MediaRef()
+        media_ref.set_reference_handle(media.handle)
+        person.add_media_reference(media_ref)
+
     def add_start_person(self) -> Person:
         """Add & commit a start person."""
         person = Person()
@@ -211,6 +253,7 @@ class FakeTree:
             birth_place_handle = birth_place.handle
         self.add_birth_date(person, 1970, 2000, place_handle=birth_place_handle)
         self.add_note(person)
+        self.add_face(person)
 
         with DbTxn("Add person", self.db) as trans:
             self.db.add_person(person, trans)
@@ -265,6 +308,10 @@ class FakeTree:
         father_birth_year = self.get_birth_year(father)
         if self.random_bool(self.PROB_PERSON_HAS_NOTE):
             self.add_note(father)
+        if father_birth_year > 1940:
+            self.add_face(father, color=True)
+        elif father_birth_year > 1860:
+            self.add_face(father, color=False)
 
         # mother
         mother = Person()
@@ -284,6 +331,11 @@ class FakeTree:
         mother_birth_year = self.get_birth_year(mother)
         if self.random_bool(self.PROB_PERSON_HAS_NOTE):
             self.add_note(mother)
+
+        if mother_birth_year > 1940:
+            self.add_face(mother, color=True)
+        elif mother_birth_year > 1860:
+            self.add_face(mother, color=False)
 
         marriage_year = random.randint(
             max(father_birth_year, mother_birth_year) + 18, birth_year - 1
