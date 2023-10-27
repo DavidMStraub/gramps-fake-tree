@@ -144,7 +144,7 @@ class FakeTree:
         year_min: int,
         year_max: int,
         place_handle: Optional[str] = None,
-    ):
+    ) -> Event:
         """Add and commit an event."""
         event = Event()
         event.handle = self.random_handle()
@@ -162,6 +162,8 @@ class FakeTree:
         event_ref = EventRef()
         event_ref.ref = event.handle
         obj.event_ref_list.append(event_ref)
+
+        return event
 
     def add_note(self, obj):
         """Add a note to an object."""
@@ -210,36 +212,63 @@ class FakeTree:
         )
         person.death_ref_index = len(person.event_ref_list) - 1
 
-    def add_face(self, person: Person, color: bool = True):
-        face = ""
-        for image in self.images:
-            if color and "people" in image and "color" in image:
-                face = image
+    def add_image(self, obj, folder: str, title: str, color: bool = True):
+        image = ""
+        for candidate_image in self.images:
+            if color and folder in candidate_image and "color" in candidate_image:
+                image = candidate_image
                 break
-            if not color and "people" in image and "grayscale" in image:
-                face = image
+            if (
+                not color
+                and folder in candidate_image
+                and "grayscale" in candidate_image
+            ):
+                image = candidate_image
                 break
-        if not face:
+        if not image:
             return
         # remove image from faces since we used it
-        self.images = self.images - {face}
+        self.images = self.images - {image}
 
         media = Media()
         media.handle = self.random_handle()
-        media.set_path(face)
-        checksum = create_checksum(os.path.abspath(face))
+        media.set_path(image)
+        checksum = create_checksum(os.path.abspath(image))
         media.set_checksum(checksum)
         media.set_mime_type("image/jpeg")
-        name_display = NameDisplay()
-        person_name = name_display.display(person)
-        media.set_description(person_name)
+        media.set_description(title)
 
         with DbTxn("Add media object", self.db) as trans:
             self.db.add_media(media, trans)
 
         media_ref = MediaRef()
         media_ref.set_reference_handle(media.handle)
-        person.add_media_reference(media_ref)
+        obj.add_media_reference(media_ref)
+
+    def add_face(self, person: Person, color: bool = True):
+        name_display = NameDisplay()
+        person_name = name_display.display(person)
+        return self.add_image(
+            obj=person, folder="people", title=person_name, color=color
+        )
+
+    def add_family_picture(
+        self, family: Family, father: Person, mother: Person, color: bool = True
+    ):
+        name_display = NameDisplay()
+        father_name = name_display.display(father)
+        mother_name = name_display.display(mother)
+        title = f"{father_name} & {mother_name}"
+        return self.add_image(obj=family, folder="family", title=title, color=color)
+
+    def add_wedding_picture(
+        self, event: Event, father: Person, mother: Person, color: bool = True
+    ):
+        name_display = NameDisplay()
+        father_name = name_display.display(father)
+        mother_name = name_display.display(mother)
+        title = f"{father_name} & {mother_name}"
+        return self.add_image(obj=event, folder="wedding", title=title, color=color)
 
     def add_start_person(self) -> Person:
         """Add & commit a start person."""
@@ -341,7 +370,11 @@ class FakeTree:
             max(father_birth_year, mother_birth_year) + 18, birth_year - 1
         )
         if not self.random_bool(self.PROB_UNMARRIED):
-            self.add_event(family, EventType.MARRIAGE, marriage_year, marriage_year)
+            marriage = self.add_event(
+                family, EventType.MARRIAGE, marriage_year, marriage_year
+            )
+        else:
+            marriage = None
 
         father_age = self.random_age(min_age=marriage_year - father_birth_year + 1)
         mother_age = self.random_age(min_age=marriage_year - mother_birth_year + 1)
@@ -354,11 +387,22 @@ class FakeTree:
             mother, mother_death_year, mother_death_year, birth_place_handle
         )
 
+        if marriage_year > 1950:
+            self.add_family_picture(family, father, mother, color=True)
+            if marriage:
+                self.add_wedding_picture(marriage, father, mother, color=True)
+        elif marriage_year > 1880:
+            self.add_family_picture(family, father, mother, color=False)
+            if marriage:
+                self.add_wedding_picture(marriage, father, mother, color=True)
+
         with DbTxn("Add parents", self.db) as trans:
             self.db.add_person(father, trans)
             self.db.add_person(mother, trans)
             self.db.add_family(family, trans)
             self.db.commit_person(person, trans)
+            if marriage:
+                self.db.commit_event(marriage, trans)
 
         n_siblings = random.randint(0, self.MAX_SIBLINGS)
         year = marriage_year + 1
