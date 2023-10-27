@@ -455,10 +455,12 @@ class FakeTree:
                 self.add_family(mother, recursive=True, n_gen=n_gen + 1)
 
     def add_places(self):
-        with DbTxn("Add places", self.db) as trans:
-            for _ in range(self.NUM_PLACES):
-                place = self.random_place()
-                self.places.append(place)
+        for _ in range(self.NUM_PLACES):
+            place = self.random_place()
+            colored = bool(random.randint(0, 1))
+            self.places.append(place)
+            self.add_image(place, "town", str(place.name.value), color=colored)
+            with DbTxn("Add place", self.db) as trans:
                 self.db.add_place(place, trans)
 
 
